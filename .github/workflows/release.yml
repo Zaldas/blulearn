@@ -1,0 +1,43 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on tags like v1.0, v1.1, etc.
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create release zip
+        run: |
+          mkdir -p release
+          git archive HEAD --prefix=blulearn/ | tar -xC release/
+          cd release && zip -r blulearn.zip blulearn && cd ..
+
+          # --- Font (install to Windows; the banner references it by family name) ---
+          cp ".github/fonts/Jupiter Pro Regular.otf" release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: blulearn.${{ steps.version.outputs.VERSION }}
+          files: |
+            release/blulearn.zip
+            release/Jupiter Pro Regular.otf
+          generate_release_notes: true
+          draft: true
+          fail_on_unmatched_files: true
