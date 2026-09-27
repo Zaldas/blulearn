@@ -4,11 +4,11 @@
 
 local imgui = require('imgui');
 local gdi   = require('gdifonts.include');
+local uiTheme = require('libs/uiTheme');
 
 local M    = {};
 local open = { false };
 
-local INDENT     = 8;
 local BUTTON_GAP = 6;
 
 local GRADIENT_LABELS = 'None\0Left to Right\0Top-Left to Bottom-Right\0Top to Bottom\0'
@@ -59,60 +59,6 @@ local function SetFlag(value, flag, enabled)
 end
 
 
--- primary -> solid blue, active -> amber (toggle is on), neither -> ghost.
-local function StyledButton(label, size, primary, active)
-    imgui.PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0);
-
-    if active then
-        imgui.PushStyleColor(ImGuiCol_Button,        { 0.70, 0.45, 0.05, 1.00 });
-        imgui.PushStyleColor(ImGuiCol_ButtonHovered, { 0.80, 0.55, 0.10, 1.00 });
-        imgui.PushStyleColor(ImGuiCol_ButtonActive,  { 0.55, 0.35, 0.03, 1.00 });
-    elseif primary then
-        imgui.PushStyleColor(ImGuiCol_Button,        { 0.25, 0.40, 0.85, 1.00 });
-        imgui.PushStyleColor(ImGuiCol_ButtonHovered, { 0.30, 0.48, 0.95, 1.00 });
-        imgui.PushStyleColor(ImGuiCol_ButtonActive,  { 0.18, 0.32, 0.70, 1.00 });
-    else
-        imgui.PushStyleColor(ImGuiCol_Button,        { 0.00, 0.00, 0.00, 0.00 });
-        imgui.PushStyleColor(ImGuiCol_ButtonHovered, { 1.00, 1.00, 1.00, 0.12 });
-        imgui.PushStyleColor(ImGuiCol_ButtonActive,  { 1.00, 1.00, 1.00, 0.20 });
-    end
-
-    local clicked = imgui.Button(label, size);
-    imgui.PopStyleColor(3);
-    imgui.PopStyleVar(1);
-    return clicked;
-end
-
-local function SectionHeader(text, availW, helpText)
-    local drawList = imgui.GetWindowDrawList();
-    local x, y     = imgui.GetCursorScreenPos();
-    local lineH    = imgui.GetTextLineHeightWithSpacing();
-
-    local colLeft     = { 0.25, 0.40, 0.85, 1.00 };
-    local colRight    = { colLeft[1], colLeft[2], colLeft[3], 0.00 };
-    local colLeftU32  = imgui.GetColorU32(colLeft);
-    local colRightU32 = imgui.GetColorU32(colRight);
-    drawList:AddRectFilledMultiColor(
-        { x, y }, { x + availW * 0.75, y + lineH },
-        colLeftU32, colRightU32, colRightU32, colLeftU32
-    );
-
-    imgui.SetCursorScreenPos({ x + 4, y + 2 });
-    imgui.Text(text);
-
-    if helpText then
-        imgui.SameLine();
-        imgui.TextDisabled('(?)');
-        if imgui.IsItemHovered() then
-            imgui.SetTooltip(helpText);
-        end
-    end
-
-    local _, newY = imgui.GetCursorScreenPos();
-    imgui.SetCursorScreenPos({ x, newY });
-    imgui.Spacing();
-end
-
 local function AvailWidth()
     local avail = imgui.GetContentRegionAvail();
     if type(avail) == 'table' then
@@ -146,11 +92,8 @@ end
 
 
 local function TextTab(id, tbl, textBuf, fontBuf, cb, hint)
-    local availW  = AvailWidth();
-    local comboW  = math.floor((availW - INDENT) * 0.65);
-
-    SectionHeader('Text', availW, hint);
-    imgui.Indent(INDENT);
+    uiTheme.header('Text', hint);
+    imgui.Indent(uiTheme.indent);
 
         if imgui.InputText('Content##' .. id, textBuf, 256) then
             tbl.text = textBuf[1];
@@ -175,6 +118,7 @@ local function TextTab(id, tbl, textBuf, fontBuf, cb, hint)
             cb.fonts();
             cb.save();
         end
+        uiTheme.helpMarker('Draw this text in bold.');
         imgui.SameLine();
         local italic = { HasFlag(tbl.fontFlags, 2) };
         if imgui.Checkbox('Italic##' .. id, italic) then
@@ -182,18 +126,19 @@ local function TextTab(id, tbl, textBuf, fontBuf, cb, hint)
             cb.fonts();
             cb.save();
         end
+        uiTheme.helpMarker('Draw this text in italics.');
 
-    imgui.Unindent(INDENT);
+    imgui.Unindent(uiTheme.indent);
     imgui.Spacing();
 
-    SectionHeader('Colours', availW, 'Fill fades into the gradient colour along the fade direction.');
-    imgui.Indent(INDENT);
+    uiTheme.header('Colours', 'Fill fades into the gradient colour along the fade direction.');
+    imgui.Indent(uiTheme.indent);
 
         ColorRow('Fill##' .. id, tbl, 'fontColor', cb);
         ColorRow('Gradient##' .. id, tbl, 'gradientColor', cb);
 
         local style = { tbl.gradientStyle };
-        imgui.SetNextItemWidth(comboW);
+        imgui.SetNextItemWidth(uiTheme.comboWidth());
         if imgui.Combo('Fade##' .. id, style, GRADIENT_LABELS) then
             tbl.gradientStyle = style[1];
             cb.fonts();
@@ -203,23 +148,19 @@ local function TextTab(id, tbl, textBuf, fontBuf, cb, hint)
         ColorRow('Outline##' .. id, tbl, 'outlineColor', cb);
         SliderIntSaved('Outline width##' .. id, tbl, 'outlineWidth', 0, 12, '%d px', cb, true);
 
-    imgui.Unindent(INDENT);
+    imgui.Unindent(uiTheme.indent);
     imgui.Spacing();
 
-    SectionHeader('Placement', availW, 'Vertical offset from the banner centre.');
-    imgui.Indent(INDENT);
+    uiTheme.header('Placement', 'Vertical offset from the banner centre.');
+    imgui.Indent(uiTheme.indent);
         SliderIntSaved('Y offset##' .. id, tbl, 'offsetY', -200, 200, '%d px', cb, false);
-    imgui.Unindent(INDENT);
+    imgui.Unindent(uiTheme.indent);
     imgui.Spacing();
 end
 
 local function GeneralTab(config, cb)
-    local availW = AvailWidth();
-    local itemW  = math.floor(availW * 0.80);
-    local pad    = math.floor((availW - itemW) * 0.5);
-
-    SectionHeader('Position', availW, 'Where the banner sits vertically.\n0 is the top of the screen, 100 the bottom.');
-    imgui.Indent(INDENT);
+    uiTheme.header('Position', 'Where the banner sits vertically.\n0 is the top of the screen, 100 the bottom.');
+    imgui.Indent(uiTheme.indent);
 
         local posY = { config.screenPosY };
         if imgui.SliderFloat('Screen Y', posY, 0.0, 100.0, '%.1f%%') then
@@ -229,20 +170,18 @@ local function GeneralTab(config, cb)
             cb.save();
         end
 
-    imgui.Unindent(INDENT);
+    imgui.Unindent(uiTheme.indent);
     imgui.Spacing();
 
-    SectionHeader('Sound', availW, 'Played once when a spell is learned.\nThe file must sit in the blulearn folder.');
-    imgui.Indent(INDENT);
+    uiTheme.header('Sound', 'Played once when a spell is learned.\nThe file must sit in the blulearn folder.');
+    imgui.Indent(uiTheme.indent);
 
         local enabled = { config.soundEnabled };
         if imgui.Checkbox('Play a sound', enabled) then
             config.soundEnabled = enabled[1];
             cb.save();
         end
-        if imgui.IsItemHovered() then
-            imgui.SetTooltip('Mute the banner without clearing the filename.');
-        end
+        uiTheme.helpMarker('Mute the banner without clearing the filename.');
 
         if imgui.InputText('File##sound', buf.soundFile, 128) then
             config.soundFile = buf.soundFile[1];
@@ -253,22 +192,24 @@ local function GeneralTab(config, cb)
             imgui.TextColored({ 1.0, 0.4, 0.4, 1.0 }, 'not found');
         end
 
-    imgui.Unindent(INDENT);
+    imgui.Unindent(uiTheme.indent);
+    imgui.Spacing();
+    imgui.Separator();
     imgui.Spacing();
 
-    imgui.SetCursorPosX(imgui.GetCursorPosX() + pad);
-    if StyledButton('Reload settings file', { itemW, 0 }, true, false) then
+    if uiTheme.centeredButton('Reload settings file', 'primary') then
         cb.reload();
         M.SyncBuffers(config);
     end
     if imgui.IsItemHovered() then
-        imgui.SetTooltip('Re-read settings.lua from disk. Use after editing\nthe values this window does not expose.');
+        uiTheme.tooltipBegin();
+        imgui.TextUnformatted('Re-read settings.lua from disk. Use after editing\nthe values this window does not expose.');
+        uiTheme.tooltipEnd();
     end
 
     imgui.Spacing();
 
-    imgui.SetCursorPosX(imgui.GetCursorPosX() + pad);
-    if StyledButton('Reset to defaults', { itemW, 0 }, false, false) then
+    if uiTheme.centeredButton('Reset to defaults', 'ghost') then
         cb.reset();
         M.SyncBuffers(config);
     end
@@ -302,10 +243,7 @@ function M.Draw(config, cb)
         return;
     end
 
-    -- No NoSavedSettings flag: imgui.ini persists the position by window title.
-    -- AlwaysAutoResize fits the height to the active tab and drops the resize
-    -- grip; the window is still draggable by its title bar.
-    if imgui.Begin('blulearn.' .. addon.version, open, ImGuiWindowFlags_AlwaysAutoResize) then
+    local function drawBody()
         -- Pins the content width. Without it, auto-resize would size to whichever
         -- tab is widest and the window would jump on every tab switch.
         imgui.Dummy({ 370, 1 });
@@ -316,15 +254,17 @@ function M.Draw(config, cb)
         local pad    = math.floor((availW - rowW) * 0.5);
 
         imgui.SetCursorPosX(imgui.GetCursorPosX() + pad);
-        if StyledButton('Play', { btnW, 0 }, true, false) then
+        if uiTheme.button('Play', btnW, 'primary') then
             cb.test();
         end
         imgui.SameLine(0, BUTTON_GAP);
-        if StyledButton('Hold', { btnW, 0 }, false, cb.holding()) then
+        if uiTheme.button('Hold', btnW, cb.holding() and 'active' or 'ghost') then
             cb.hold();
         end
         if imgui.IsItemHovered() then
-            imgui.SetTooltip('Freeze the banner in its final position\nso you can adjust it live.');
+            uiTheme.tooltipBegin();
+            imgui.TextUnformatted('Freeze the banner in its final position\nso you can adjust it live.');
+            uiTheme.tooltipEnd();
         end
 
         imgui.Spacing();
@@ -352,12 +292,23 @@ function M.Draw(config, cb)
             imgui.EndTabBar();
         end
     end
+
+    local n = uiTheme.push();
+    local ok, err = true, nil;
+    -- No NoSavedSettings flag: imgui.ini persists the position by window title.
+    -- AlwaysAutoResize fits the height to the active tab and drops the resize
+    -- grip; the window is still draggable by its title bar.
+    if imgui.Begin('blulearn.' .. addon.version, open, ImGuiWindowFlags_AlwaysAutoResize) then
+        ok, err = pcall(drawBody);
+    end
     imgui.End();
+    uiTheme.pop(n);
 
     -- Closing via the X leaves a held banner stuck on screen otherwise.
     if not open[1] then
         cb.close();
     end
+    if not ok then error(err, 0); end
 end
 
 return M;
