@@ -1,6 +1,6 @@
 addon.name      = 'blulearn';
 addon.author    = 'Thorny, Zaldas';
-addon.version   = '1.0';
+addon.version   = '1.1';
 addon.desc      = 'Animated banner naming each blue magic spell you learn.';
 addon.link      = 'https://github.com/Zaldas/blulearn';
 
