@@ -12,15 +12,17 @@ local ffi       = require('ffi');
 local settings  = require('settings');
 local gdi       = require('gdifonts.include');
 local configUi  = require('config');
+local socket    = require('socket');
 
 -- The banner draws its image layers and its text in one present callback, so
 -- gdifonts must not render on its own tick -- otherwise the text order relative
 -- to the layer sprite is whatever the handler registration order happens to be.
 gdi:set_auto_render(false);
 
--- Message 419 (MsgBasic::LearnsSpell) in packet 0x0029. LSB puts the spell id in
--- the Data field, so the banner can name the spell rather than the event.
+-- Message 419 (MsgBasic::LearnsSpell) in packet 0x0029. Data holds the learned
+-- spell id; UniqueNoTar holds the learner's server id.
 local MSG_LEARNS_SPELL  = 419;
+local OFFSET_TARGET     = 0x08;
 local OFFSET_DATA       = 0x0C;
 local OFFSET_MESSAGENUM = 0x18;
 
@@ -103,6 +105,7 @@ local banner = T{
     active      = false,
     hold        = false,
     triggeredAt = 0,
+    spell       = '',
 };
 
 local layers = T{
@@ -112,6 +115,8 @@ local layers = T{
 
 local titleObj    = nil;
 local subtitleObj = nil;
+
+local screenW, screenH = 1024, 768;
 
 local sprite    = nil;
 local vecScale  = ffi.new('D3DXVECTOR2', { 1.0, 1.0 });
@@ -136,8 +141,8 @@ local function EaseOut(t)
     return 1.0 - (inv * inv);
 end
 
--- 0 before the phase opens, 1 once it has closed. A zero-length phase is treated
--- as already complete rather than dividing by zero.
+-- 0 before the phase opens, 1 once it has closed. A zero-length phase counts as
+-- closed.
 local function Phase(elapsed, start, length)
     if elapsed <= start then
         return 0.0;
@@ -149,13 +154,10 @@ local function Phase(elapsed, start, length)
 end
 
 
--- Midpoint of the title top and the subtitle bottom, relative to centre. The
--- images centre on this rather than on centre itself, so they stay aligned with
--- the text block when font sizes or offsets change.
---
--- The subtitle's measured texture height is used rather than its fontHeight,
--- since the rasterised text carries the outline and the font's internal leading
--- on top of the requested cell. get_text_size is cached unless the text changed.
+-- Midpoint of the title top and the subtitle bottom, relative to centre; the
+-- images centre on it. The subtitle height is its measured texture height, which
+-- includes the outline and the font's internal leading on top of fontHeight.
+-- get_text_size is cached until the text changes.
 local function TextBlockCenter()
     local height = config.subtitle.fontHeight;
 
@@ -186,11 +188,11 @@ local function ApplyFonts()
     ApplyFont(subtitleObj, config.subtitle);
 end
 
--- Kept out of ApplyFont: that runs from slider drags, so a missing font would
--- print once per frame. Only call this from load, reload and reset.
+-- Prints once per missing font. ApplyFont runs every frame of a slider drag, so
+-- this is called only from load, reload and reset.
 local function WarnMissingFonts()
     for _, cfg in ipairs({ config.title, config.subtitle }) do
-        if not gdi:get_font_available(cfg.fontFamily) then
+        if not configUi.FontAvailable(cfg.fontFamily) then
             print(chat.header(addon.name) .. chat.warning(('Font \'%s\' is not installed; GDI will substitute a default.'):format(cfg.fontFamily)));
         end
     end
@@ -219,8 +221,8 @@ local function LoadLayer(layer, file)
         return;
     end
 
-    -- Wrapped: a d3dx8 build missing either export raises on the ffi.C index
-    -- itself, which would otherwise abort the load event.
+    -- Indexing ffi.C raises when the d3dx8 build lacks either export; pcall keeps
+    -- that from aborting the load event.
     local ok, err = pcall(function()
         local info = ffi.new('D3DXIMAGE_INFO[1]');
         if (ffi.C.D3DXGetImageInfoFromFileA(path, info) ~= ffi.C.S_OK) then
@@ -250,8 +252,7 @@ local function LoadLayers()
     LoadLayer(layers.staff, config.staff.image);
 end
 
--- targetHeight is the on-screen frame height; the scale is derived here so the
--- guard and the division that needs it cannot drift apart.
+-- targetHeight is the on-screen frame height.
 local function DrawLayer(layer, targetHeight, rotation, centerX, centerY, alpha)
     if (layer.texture == nil) or (layer.height == 0) or (alpha <= 0) then
         return;
@@ -287,6 +288,11 @@ local function ExpandTokens(format, spellName)
     return out;
 end
 
+local function ApplyBannerText()
+    titleObj:set_text(ExpandTokens(config.title.text, banner.spell));
+    subtitleObj:set_text(ExpandTokens(config.subtitle.text, banner.spell));
+end
+
 local function PlaySound()
     if (not config.soundEnabled) or (config.soundFile == '') then
         return;
@@ -308,14 +314,14 @@ local function TriggerBanner(spellName, hold)
         return;
     end
 
-    titleObj:set_text(ExpandTokens(config.title.text, spellName));
-    subtitleObj:set_text(ExpandTokens(config.subtitle.text, spellName));
+    banner.spell = spellName;
+    ApplyBannerText();
     titleObj:set_visible(true);
     subtitleObj:set_visible(true);
 
     banner.active      = true;
     banner.hold        = (hold == true);
-    banner.triggeredAt = os.clock();
+    banner.triggeredAt = socket.gettime();
 
     if not banner.hold then
         PlaySound();
@@ -323,14 +329,19 @@ local function TriggerBanner(spellName, hold)
 end
 
 
--- config is mutated in place rather than replaced: the settings library saves
--- the table it cached at load time, so reassigning it would silently stop
--- anything from persisting.
+-- settings.save writes the table settings.load returned, so reset mutates config
+-- in place; a replacement table would never be saved.
 local uiCallbacks = {
     save    = function() settings.save(); end,
     test    = function() TriggerBanner('Frenetic Rip'); end,
     holding = function() return banner.active and banner.hold; end,
     fonts   = ApplyFonts,
+
+    text = function()
+        if banner.active and banner.hold then
+            ApplyBannerText();
+        end
+    end,
 
     hold = function()
         if banner.active and banner.hold then
@@ -346,11 +357,10 @@ local uiCallbacks = {
         end
     end,
 
-    -- settings.load raises the settings-changed event, whose handler reapplies
-    -- the fonts and reloads the layers. Repeating that here would build every
-    -- texture twice.
+    -- settings.reload raises the settings event; its handler takes the new
+    -- table, syncs the window buffers, reapplies the fonts and reloads the layers.
     reload = function()
-        config = settings.load(defaults);
+        settings.reload();
     end,
 
     reset = function()
@@ -362,6 +372,9 @@ local uiCallbacks = {
         ApplyFonts();
         WarnMissingFonts();
         LoadLayers();
+        if banner.active and banner.hold then
+            ApplyBannerText();
+        end
     end,
 };
 
@@ -378,7 +391,7 @@ ashita.events.register('d3d_present', 'blulearn_present_cb', function()
     if banner.hold then
         maskAlpha, staffAlpha, textAlpha, rise, rotation = 1.0, 1.0, 1.0, 0.0, 0.0;
     else
-        local t = os.clock() - banner.triggeredAt;
+        local t = socket.gettime() - banner.triggeredAt;
 
         local tEntrance  = TIMELINE.entrance;
         local tSpin      = tEntrance + TIMELINE.spin;
@@ -403,7 +416,6 @@ ashita.events.register('d3d_present', 'blulearn_present_cb', function()
         rotation   = -TWO_PI * config.staff.spins * EaseOut(Phase(t, tEntrance, TIMELINE.spin));
     end
 
-    local screenW, screenH = GetScreenSize();
     local centerX = screenW / 2;
     local centerY = screenH * (config.screenPosY / 100);
 
@@ -452,6 +464,11 @@ ashita.events.register('packet_in', 'blulearn_packet_cb', function(e)
         return;
     end
 
+    local targetId = struct.unpack('I', e.data, OFFSET_TARGET + 0x01);
+    if targetId ~= AshitaCore:GetMemoryManager():GetParty():GetMemberServerId(0) then
+        return;
+    end
+
     local spellId = struct.unpack('I', e.data, OFFSET_DATA + 0x01);
     local spell   = AshitaCore:GetResourceManager():GetSpellById(spellId);
 
@@ -483,6 +500,7 @@ ashita.events.register('command', 'blulearn_command_cb', function(e)
     -- Toggling shut bypasses the window's own close handling, which would leave
     -- a held banner on screen with nothing left to expire it.
     if not configUi.Toggle(config) then
+        configUi.Flush(config, uiCallbacks);
         uiCallbacks.close();
     end
 end);
@@ -500,10 +518,15 @@ settings.register('settings', 'blulearn_settings_update', function(s)
     ApplyFonts();
     WarnMissingFonts();
     LoadLayers();
+    if banner.active and banner.hold then
+        ApplyBannerText();
+    end
 end);
 
 
 ashita.events.register('load', 'blulearn_load_cb', function()
+    screenW, screenH = GetScreenSize();
+
     local spriteRef = ffi.new('ID3DXSprite*[1]');
     if (ffi.C.D3DXCreateSprite(d3d.get_device(), spriteRef) == ffi.C.S_OK) then
         sprite = d3d.gc_safe_release(ffi.cast('ID3DXSprite*', spriteRef[0]));
@@ -517,6 +540,7 @@ end);
 
 
 ashita.events.register('unload', 'blulearn_unload_cb', function()
+    configUi.Flush(config, uiCallbacks);
     HideBanner();
 
     if titleObj ~= nil then gdi:destroy_object(titleObj); end

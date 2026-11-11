@@ -10,6 +10,7 @@ local M    = {};
 local open = { false };
 
 local BUTTON_GAP = 6;
+local WARN_COLOR = { 1.0, 0.4, 0.4, 1.0 };
 
 local GRADIENT_LABELS = 'None\0Left to Right\0Top-Left to Bottom-Right\0Top to Bottom\0'
     .. 'Top-Right to Bottom-Left\0Right to Left\0Bottom-Right to Top-Left\0'
@@ -25,8 +26,34 @@ local buf = {
     soundFile = { '' },
 };
 
--- Built with arithmetic rather than bit ops: bit.lshift(255, 24) is negative in
--- LuaJIT, which would round-trip colours to garbage.
+local soundFound = false;
+local fontMissing = { title = false, sub = false };
+
+-- Set by text edits not yet saved; Flush saves them when the window closes or
+-- the addon unloads mid-edit.
+local dirty = false;
+
+local function RefreshSoundFound(file)
+    soundFound = ashita.fs.exists(string.format('%s/%s', addon.path, file));
+end
+
+function M.FontAvailable(name)
+    return gdi:get_font_available(name) and true or false;
+end
+
+-- Font edits stay in the buffer until committed, so config always names the
+-- font that is drawn.
+local function CommitFont(tbl, fontBuf, id)
+    fontMissing[id] = not M.FontAvailable(fontBuf[1]);
+    if tbl.fontFamily == fontBuf[1] then
+        return false;
+    end
+    tbl.fontFamily = fontBuf[1];
+    return true;
+end
+
+-- LuaJIT bit ops return signed 32-bit results (bit.lshift(255, 24) is negative),
+-- so the alpha byte is packed with arithmetic.
 local function ArgbToFloats(argb)
     return {
         (math.floor(argb / 0x10000) % 0x100) / 255,
@@ -97,32 +124,41 @@ local function TextTab(id, tbl, textBuf, fontBuf, cb, hint)
 
         if imgui.InputText('Content##' .. id, textBuf, 256) then
             tbl.text = textBuf[1];
+            cb.text();
+            dirty = true;
+        end
+        if imgui.IsItemDeactivatedAfterEdit() then
             cb.save();
+            dirty = false;
         end
 
         if imgui.InputText('Font##' .. id, fontBuf, 128) then
-            tbl.fontFamily = fontBuf[1];
+            dirty = true;
+        end
+        if imgui.IsItemDeactivatedAfterEdit() then
+            CommitFont(tbl, fontBuf, id);
             cb.fonts();
             cb.save();
+            dirty = false;
         end
-        if not gdi:get_font_available(tbl.fontFamily) then
+        if fontMissing[id] then
             imgui.SameLine();
-            imgui.TextColored({ 1.0, 0.4, 0.4, 1.0 }, 'not installed');
+            imgui.TextColored(WARN_COLOR, 'not installed');
         end
 
         SliderIntSaved('Size##' .. id, tbl, 'fontHeight', 8, 160, '%d px', cb, true);
 
-        local bold = { HasFlag(tbl.fontFlags, 1) };
+        local bold = { HasFlag(tbl.fontFlags, gdi.FontFlags.Bold) };
         if imgui.Checkbox('Bold##' .. id, bold) then
-            tbl.fontFlags = SetFlag(tbl.fontFlags, 1, bold[1]);
+            tbl.fontFlags = SetFlag(tbl.fontFlags, gdi.FontFlags.Bold, bold[1]);
             cb.fonts();
             cb.save();
         end
         uiTheme.helpMarker('Draw this text in bold.');
         imgui.SameLine();
-        local italic = { HasFlag(tbl.fontFlags, 2) };
+        local italic = { HasFlag(tbl.fontFlags, gdi.FontFlags.Italic) };
         if imgui.Checkbox('Italic##' .. id, italic) then
-            tbl.fontFlags = SetFlag(tbl.fontFlags, 2, italic[1]);
+            tbl.fontFlags = SetFlag(tbl.fontFlags, gdi.FontFlags.Italic, italic[1]);
             cb.fonts();
             cb.save();
         end
@@ -185,11 +221,16 @@ local function GeneralTab(config, cb)
 
         if imgui.InputText('File##sound', buf.soundFile, 128) then
             config.soundFile = buf.soundFile[1];
-            cb.save();
+            RefreshSoundFound(config.soundFile);
+            dirty = true;
         end
-        if not ashita.fs.exists(string.format('%s/%s', addon.path, config.soundFile)) then
+        if imgui.IsItemDeactivatedAfterEdit() then
+            cb.save();
+            dirty = false;
+        end
+        if not soundFound then
             imgui.SameLine();
-            imgui.TextColored({ 1.0, 0.4, 0.4, 1.0 }, 'not found');
+            imgui.TextColored(WARN_COLOR, 'not found');
         end
 
     imgui.Unindent(uiTheme.indent);
@@ -199,7 +240,6 @@ local function GeneralTab(config, cb)
 
     if uiTheme.centeredButton('Reload settings file', 'primary') then
         cb.reload();
-        M.SyncBuffers(config);
     end
     if imgui.IsItemHovered() then
         uiTheme.tooltipBegin();
@@ -222,6 +262,24 @@ function M.SyncBuffers(config)
     buf.subText[1]   = config.subtitle.text;
     buf.subFont[1]   = config.subtitle.fontFamily;
     buf.soundFile[1] = config.soundFile;
+    RefreshSoundFound(config.soundFile);
+    fontMissing.title = not M.FontAvailable(config.title.fontFamily);
+    fontMissing.sub   = not M.FontAvailable(config.subtitle.fontFamily);
+    dirty = false;
+end
+
+-- Saves text edits still in progress, committing any pending font change.
+function M.Flush(config, cb)
+    if not dirty then
+        return;
+    end
+    local titleChanged = CommitFont(config.title, buf.titleFont, 'title');
+    local subChanged   = CommitFont(config.subtitle, buf.subFont, 'sub');
+    if titleChanged or subChanged then
+        cb.fonts();
+    end
+    cb.save();
+    dirty = false;
 end
 
 function M.Toggle(config)
@@ -236,7 +294,7 @@ end
 * Draws the window. Safe to call every frame whether or not the banner is up.
 *
 * @param {table} config - the live settings table
-* @param {table} cb - { save, fonts, test, hold, holding, reset, close }
+* @param {table} cb - { save, fonts, text, test, hold, holding, reload, reset, close }
 --]]
 function M.Draw(config, cb)
     if not open[1] then
@@ -256,6 +314,7 @@ function M.Draw(config, cb)
         imgui.SetCursorPosX(imgui.GetCursorPosX() + pad);
         if uiTheme.button('Play', btnW, 'primary') then
             cb.test();
+            RefreshSoundFound(config.soundFile);
         end
         imgui.SameLine(0, BUTTON_GAP);
         if uiTheme.button('Hold', btnW, cb.holding() and 'active' or 'ghost') then
@@ -295,10 +354,11 @@ function M.Draw(config, cb)
 
     local n = uiTheme.push();
     local ok, err = true, nil;
-    -- No NoSavedSettings flag: imgui.ini persists the position by window title.
+    -- No NoSavedSettings flag: imgui.ini persists the position under the ###id,
+    -- which is independent of the version in the title.
     -- AlwaysAutoResize fits the height to the active tab and drops the resize
     -- grip; the window is still draggable by its title bar.
-    if imgui.Begin('blulearn.' .. addon.version, open, ImGuiWindowFlags_AlwaysAutoResize) then
+    if imgui.Begin(('blulearn.%s###blulearnConfig'):format(addon.version), open, ImGuiWindowFlags_AlwaysAutoResize) then
         ok, err = pcall(drawBody);
     end
     imgui.End();
@@ -306,6 +366,7 @@ function M.Draw(config, cb)
 
     -- Closing via the X leaves a held banner stuck on screen otherwise.
     if not open[1] then
+        M.Flush(config, cb);
         cb.close();
     end
     if not ok then error(err, 0); end
