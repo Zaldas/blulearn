@@ -1,14 +1,4 @@
 --[[
-Fork of the canonical gdifonts lib. This copy adds two things not present in the
-canonical version:
-  (a) a get_text_size() method on font objects, used by blulearn.lua to measure the
-      rasterised subtitle.
-  (b) a memoized GetFontAvailable/checkedFonts font-availability cache.
-Do NOT blind-copy this file over from another addon's gdifonts/ folder — doing so
-would silently remove get_text_size() and break the banner's render path.
-]]--
-
---[[
 Copyright 2023 Thorny
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
